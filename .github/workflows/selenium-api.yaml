@@ -23,13 +23,13 @@ on:
 
 jobs:
   run-selenium-script:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Updated to Ubuntu 24.04
     permissions:
       contents: write
       
     strategy:
       matrix:
-        browser: ['chrome']
+        browser: ['chrome', 'firefox']
       max-parallel: 1
 
     steps:
@@ -49,36 +49,62 @@ jobs:
       - name: Install Chrome
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget gnupg
+          sudo apt-get install -y wget gnupg software-properties-common
+          
+          # Install Chrome
           wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
+          
+          echo "Chrome version:"
           google-chrome --version
-          echo "Chrome installation complete"
+          echo "✓ Chrome installation complete"
 
-      # Step 4: Install Firefox (optional, kept for future use)
+      # Step 4: Install Firefox (for future use)
       - name: Install Firefox
         run: |
           sudo apt-get update
-          sudo apt-get install -y firefox-esr
-          firefox --version || echo "Firefox installed"
+          # Install regular Firefox instead of firefox-esr
+          sudo apt-get install -y firefox
+          
+          echo "Firefox version:"
+          firefox --version
+          echo "✓ Firefox installation complete"
 
-      # Step 5: Install required dependencies
+      # Step 5: Install GeckoDriver (for Firefox support)
+      - name: Install GeckoDriver
+        run: |
+          # Download and install GeckoDriver
+          LATEST_GECKODRIVER=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+          echo "Latest GeckoDriver version: $LATEST_GECKODRIVER"
+          
+          wget https://github.com/mozilla/geckodriver/releases/download/${LATEST_GECKODRIVER}/geckodriver-${LATEST_GECKODRIVER}-linux64.tar.gz
+          tar -xzf geckodriver-${LATEST_GECKODRIVER}-linux64.tar.gz
+          sudo mv geckodriver /usr/local/bin/
+          sudo chmod +x /usr/local/bin/geckodriver
+          rm geckodriver-${LATEST_GECKODRIVER}-linux64.tar.gz
+          
+          echo "GeckoDriver version:"
+          geckodriver --version
+          echo "✓ GeckoDriver installation complete"
+
+      # Step 6: Install required dependencies
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install selenium==4.15.0
-          pip install undetected-chromedriver==3.5.4
+          pip install selenium==4.18.1
+          pip install undetected-chromedriver==3.5.5
           pip install requests==2.31.0
           pip install webdriver-manager==4.0.1
           pip install pyotp==2.9.0
-          pip install cryptography==41.0.7
+          pip install cryptography==42.0.5
           
           # Verify installations
+          echo "Installed packages:"
           pip list | grep -E "(selenium|undetected|requests|webdriver|pyotp|cryptography)"
 
-      # Step 6: Set up environment variables
+      # Step 7: Set up environment variables
       - name: Set environment variables
         run: |
           echo "API_URL=${{ github.event.inputs.api_url }}" >> $GITHUB_ENV
@@ -89,16 +115,22 @@ jobs:
           
           # Set display for headless browsers
           echo "DISPLAY=:99" >> $GITHUB_ENV
-          
-      # Step 7: Start virtual display
+
+      # Step 8: Install Xvfb
+      - name: Install Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          echo "✓ Xvfb installed"
+
+      # Step 9: Start virtual display
       - name: Start X Virtual Frame Buffer
         run: |
-          sudo apt-get install -y xvfb
           Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
           sleep 3
           echo "Xvfb started on display :99"
 
-      # Step 8: Write the Selenium script to a file
+      # Step 10: Write the Selenium script to a file
       - name: Write Selenium Script to File
         run: |
           cat << 'EOF' > selenium_script.py
@@ -111,7 +143,7 @@ jobs:
           # Create logs directory
           mkdir -p selenium_logs
 
-      # Step 9: Run the generated Selenium script
+      # Step 11: Run the generated Selenium script
       - name: Run Selenium Script
         id: run_selenium
         timeout-minutes: 45
@@ -122,17 +154,19 @@ jobs:
           echo "Python version:"
           python --version
           
-          echo "Installed packages:"
-          pip list | grep -E "(selenium|undetected|webdriver|requests|pyotp)"
-          
-          echo "Chrome version:"
-          google-chrome --version || echo "Chrome not found"
+          echo "Browser information:"
+          if [ "${{ matrix.browser }}" = "chrome" ]; then
+            echo "Chrome version:"
+            google-chrome --version
+          else
+            echo "Firefox version:"
+            firefox --version
+            echo "GeckoDriver version:"
+            geckodriver --version
+          fi
           
           echo "Current directory:"
           pwd
-          
-          echo "Files in workspace:"
-          ls -la
           
           # Run the script with output logging
           echo "Running selenium script..."
@@ -155,7 +189,7 @@ jobs:
             exit $EXIT_CODE
           fi
 
-      # Step 10: Upload logs and artifacts on failure
+      # Step 12: Upload logs and artifacts on failure
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -164,10 +198,9 @@ jobs:
           path: |
             selenium_logs/
             selenium_script.py
-            /tmp/xero_downloads_* 2>/dev/null || echo "No download directories found"
           retention-days: 7
 
-      # Step 11: Upload logs on success for debugging
+      # Step 13: Upload logs on success for debugging
       - name: Upload success logs
         if: success()
         uses: actions/upload-artifact@v4
@@ -177,7 +210,7 @@ jobs:
             selenium_logs/
           retention-days: 3
 
-      # Step 12: Clean up temporary files
+      # Step 14: Clean up temporary files
       - name: Clean up
         if: always()
         run: |
@@ -202,5 +235,4 @@ jobs:
             echo "✓ All browser tests completed successfully"
           else
             echo "✗ Browser tests failed"
-            # Don't exit with error to prevent workflow failure cascade
           fi
