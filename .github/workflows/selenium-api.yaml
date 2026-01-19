@@ -31,6 +31,30 @@ jobs:
         with:
           python-version: '3.9'
 
+      # Step 2.5: Setup Proxy (NEW STEP)
+      - name: Setup Proxy Service
+        id: proxy
+        run: |
+          # Install proxy tools
+          sudo apt-get update
+          sudo apt-get install -y proxychains tor
+          
+          # Start Tor service (free proxy network)
+          sudo service tor start
+          sleep 5
+          
+          # Test Tor connection
+          echo "Testing Tor connection..."
+          curl --socks5 localhost:9050 --socks5-hostname localhost:9050 -s https://check.torproject.org/ | grep -m 1 Congratulations | xargs
+          
+          # Get random proxy from free proxy list (fallback option)
+          echo "Getting free proxies..."
+          curl -s "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all" > proxies.txt
+          head -n 5 proxies.txt
+          
+          echo "PROXY_SERVER=socks5://localhost:9050" >> $GITHUB_ENV
+          echo "PROXY_AVAILABLE=true" >> $GITHUB_ENV
+
       # Step 3: Install Chrome browser
       - name: Install Chrome
         run: |
@@ -43,7 +67,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install selenium undetected-chromedriver requests webdriver-manager pyotp
+          pip install selenium undetected-chromedriver requests webdriver-manager pyotp pysocks
 
       # Step 5: Set up environment variables
       - name: Set environment variables
@@ -58,11 +82,28 @@ jobs:
           ${{ github.event.inputs.selenium_script }}
           EOF
 
+      # Step 6.5: Modify Selenium Script to Use Proxy (OPTIONAL - modify script directly)
+      - name: Add Proxy Support to Selenium Script
+        run: |
+          # Backup original script
+          cp selenium_script.py selenium_script_original.py
+          
+          # Insert proxy configuration at the beginning
+          sed -i '/def main_execution():/i \
+# Proxy configuration\nimport os\nPROXY = os.environ.get("PROXY_SERVER", "")\n' selenium_script.py
+          
+          # Modify Chrome options to include proxy
+          sed -i '/options = uc.ChromeOptions()/a \
+            \n            # Add proxy if available\n            if PROXY:\n                options.add_argument(f"--proxy-server={PROXY}")\n                print(f"Using proxy: {PROXY}")' selenium_script.py
+
       # Step 7: Run the generated Selenium script
       - name: Run Selenium Script
         id: run_selenium
+        env:
+          PROXY_SERVER: ${{ env.PROXY_SERVER }}
         run: |
           echo "Starting Selenium script execution..."
+          echo "Using proxy: $PROXY_SERVER"
           python selenium_script.py
           echo "SCRIPT_SUCCESS=true" >> $GITHUB_ENV
 
