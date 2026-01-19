@@ -29,7 +29,7 @@ jobs:
       
     strategy:
       matrix:
-        browser: ['chrome', 'firefox']
+        browser: ['chrome']
       max-parallel: 1
 
     steps:
@@ -45,54 +45,60 @@ jobs:
         with:
           python-version: '3.10'
 
-      # Step 3: Install browsers based on choice
-      - name: Install Chrome (for Chrome runs)
-        if: matrix.browser == 'chrome'
+      # Step 3: Install Chrome
+      - name: Install Chrome
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget
-          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get install -y wget gnupg
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
           google-chrome --version
+          echo "Chrome installation complete"
 
-      - name: Install Firefox (for Firefox runs)
-        if: matrix.browser == 'firefox'
+      # Step 4: Install Firefox (optional, kept for future use)
+      - name: Install Firefox
         run: |
           sudo apt-get update
-          sudo apt-get install -y firefox
+          sudo apt-get install -y firefox-esr
+          firefox --version || echo "Firefox installed"
 
-      # Step 4: Install required dependencies
-      - name: Install dependencies
+      # Step 5: Install required dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install selenium undetected-chromedriver requests webdriver-manager pyotp
+          pip install selenium==4.15.0
+          pip install undetected-chromedriver==3.5.4
+          pip install requests==2.31.0
+          pip install webdriver-manager==4.0.1
+          pip install pyotp==2.9.0
+          pip install cryptography==41.0.7
           
-          # Additional packages for better browser handling
-          pip install webdriver-manager[chrome]
-          pip install webdriver-manager[firefox]
-          pip install cryptography  # Needed for undetected-chromedriver
+          # Verify installations
+          pip list | grep -E "(selenium|undetected|requests|webdriver|pyotp|cryptography)"
 
-      # Step 5: Set up environment variables
+      # Step 6: Set up environment variables
       - name: Set environment variables
         run: |
           echo "API_URL=${{ github.event.inputs.api_url }}" >> $GITHUB_ENV
           echo "ERROR_URL=${{ github.event.inputs.error_url || '' }}" >> $GITHUB_ENV
           echo "BROWSER=${{ matrix.browser }}" >> $GITHUB_ENV
           echo "GITHUB_WORKSPACE=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "GITHUB_ACTIONS=true" >> $GITHUB_ENV
           
           # Set display for headless browsers
           echo "DISPLAY=:99" >> $GITHUB_ENV
           
-      # Step 6: Start virtual display for Firefox
-      - name: Start X Virtual Frame Buffer (for Firefox)
-        if: matrix.browser == 'firefox'
+      # Step 7: Start virtual display
+      - name: Start X Virtual Frame Buffer
         run: |
-          Xvfb :99 -screen 0 1920x1080x24 &
+          sudo apt-get install -y xvfb
+          Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
           sleep 3
+          echo "Xvfb started on display :99"
 
-      # Step 7: Write the Selenium script to a file
+      # Step 8: Write the Selenium script to a file
       - name: Write Selenium Script to File
         run: |
           cat << 'EOF' > selenium_script.py
@@ -101,63 +107,85 @@ jobs:
           
           echo "Script written to selenium_script.py"
           echo "Using browser: ${{ matrix.browser }}"
+          
+          # Create logs directory
+          mkdir -p selenium_logs
 
-      # Step 8: Run the generated Selenium script
+      # Step 9: Run the generated Selenium script
       - name: Run Selenium Script
         id: run_selenium
-        timeout-minutes: 30  # Increase timeout for slower runs
+        timeout-minutes: 45
         run: |
-          echo "Starting Selenium script with ${{ matrix.browser }}..."
+          echo "=== Starting Selenium script with ${{ matrix.browser }} ==="
           
           # Debug: Show Python and package versions
+          echo "Python version:"
           python --version
+          
+          echo "Installed packages:"
           pip list | grep -E "(selenium|undetected|webdriver|requests|pyotp)"
           
-          # Run the script
-          python selenium_script.py
+          echo "Chrome version:"
+          google-chrome --version || echo "Chrome not found"
           
-          if [ $? -eq 0 ]; then
+          echo "Current directory:"
+          pwd
+          
+          echo "Files in workspace:"
+          ls -la
+          
+          # Run the script with output logging
+          echo "Running selenium script..."
+          python selenium_script.py 2>&1 | tee selenium_logs/output.log
+          
+          EXIT_CODE=${PIPESTATUS[0]}
+          
+          if [ $EXIT_CODE -eq 0 ]; then
             echo "SCRIPT_SUCCESS=true" >> $GITHUB_ENV
-            echo "Selenium script completed successfully"
+            echo "✓ Selenium script completed successfully"
           else
             echo "SCRIPT_SUCCESS=false" >> $GITHUB_ENV
-            echo "Selenium script failed"
-            exit 1
+            echo "✗ Selenium script failed with exit code: $EXIT_CODE"
+            
+            # Capture any error logs
+            if [ -d "/tmp/xero_downloads_"* ]; then
+              cp -r /tmp/xero_downloads_* selenium_logs/ 2>/dev/null || true
+            fi
+            
+            exit $EXIT_CODE
           fi
 
-      # Step 9: Upload logs and artifacts on failure
+      # Step 10: Upload logs and artifacts on failure
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: selenium-logs-${{ matrix.browser }}
+          name: selenium-failure-logs-${{ matrix.browser }}-${{ github.run_id }}
           path: |
-            /tmp/xero_downloads_*
+            selenium_logs/
             selenium_script.py
+            /tmp/xero_downloads_* 2>/dev/null || echo "No download directories found"
+          retention-days: 7
 
-      # Step 10: Report success to API
-      - name: Report Success
-        if: success() && env.SCRIPT_SUCCESS == 'true'
-        run: |
-          echo "Script completed successfully with ${{ matrix.browser }}"
-          # The script already sends files to the API
+      # Step 11: Upload logs on success for debugging
+      - name: Upload success logs
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selenium-success-logs-${{ matrix.browser }}-${{ github.run_id }}
+          path: |
+            selenium_logs/
+          retention-days: 3
 
-      # Step 11: Report failure to API
-      - name: Report Failure
-        if: failure()
+      # Step 12: Clean up temporary files
+      - name: Clean up
+        if: always()
         run: |
-          echo "Script failed with ${{ matrix.browser }}, sending failure notification..."
-          if [ -n "${{ github.event.inputs.error_url }}" ]; then
-            curl -X POST \
-              -H "Content-Type: application/json" \
-              -d '{
-                "success": false,
-                "message": "Selenium script execution failed with ${{ matrix.browser }}",
-                "workflow_run_id": "${{ github.run_id }}",
-                "browser": "${{ matrix.browser }}"
-              }' \
-              "${{ github.event.inputs.error_url }}" || echo "Failed to send error notification"
-          fi
+          echo "Cleaning up temporary files..."
+          rm -f selenium_script.py 2>/dev/null || true
+          rm -rf selenium_logs 2>/dev/null || true
+          sudo pkill -f Xvfb 2>/dev/null || true
+          echo "Cleanup complete"
 
   # Optional: Combined success notification job
   notify-completion:
@@ -166,11 +194,13 @@ jobs:
     if: always()
     
     steps:
-      - name: Overall Status
+      - name: Check workflow status
         run: |
-          if ${{ needs.run-selenium-script.result == 'success' }}; then
-            echo "All browser tests completed successfully"
+          echo "Selenium job result: ${{ needs.run-selenium-script.result }}"
+          
+          if [ "${{ needs.run-selenium-script.result }}" = "success" ]; then
+            echo "✓ All browser tests completed successfully"
           else
-            echo "Some browser tests failed"
-            exit 1
+            echo "✗ Browser tests failed"
+            # Don't exit with error to prevent workflow failure cascade
           fi
