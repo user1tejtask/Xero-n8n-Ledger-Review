@@ -45,7 +45,22 @@ jobs:
         with:
           python-version: '3.10'
 
-      # Step 3: Install Chrome
+      # Step 3: Install required Python dependencies FIRST
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install selenium==4.18.1
+          pip install undetected-chromedriver==3.5.5
+          pip install requests==2.31.0
+          pip install webdriver-manager==4.0.1
+          pip install pyotp==2.9.0
+          pip install cryptography==42.0.5
+          
+          # Verify installations
+          echo "Installed packages:"
+          pip list | grep -E "(selenium|undetected|requests|webdriver|pyotp|cryptography)"
+
+      # Step 4: Install Chrome
       - name: Install Chrome
         run: |
           sudo apt-get update
@@ -61,7 +76,7 @@ jobs:
           google-chrome --version
           echo "✓ Chrome installation complete"
 
-      # Step 4: Install Firefox (optional, for future use)
+      # Step 5: Install Firefox (optional, for future use)
       - name: Install Firefox
         run: |
           sudo apt-get update
@@ -72,38 +87,28 @@ jobs:
           firefox --version || firefox-esr --version || echo "Firefox version check failed"
           echo "✓ Firefox installation attempted"
 
-      # Step 5: Install GeckoDriver using webdriver-manager (simpler approach)
+      # Step 6: Install GeckoDriver (simpler direct approach)
       - name: Install GeckoDriver
         run: |
-          # Install GeckoDriver via webdriver-manager
-          python -c "from webdriver_manager.firefox import GeckoDriverManager; gdm = GeckoDriverManager(); print(f'GeckoDriver path: {gdm.install()}')"
-          
-          # Also try direct download as fallback
+          # Install GeckoDriver directly (no Python module dependency here)
           GECKODRIVER_VERSION="0.34.0"
+          echo "Installing GeckoDriver v${GECKODRIVER_VERSION}"
+          
           wget -q "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz"
-          tar -xzf geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz
-          sudo mv geckodriver /usr/local/bin/
-          sudo chmod +x /usr/local/bin/geckodriver
-          rm geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz
           
-          echo "GeckoDriver installed:"
-          geckodriver --version || echo "GeckoDriver check failed"
-          echo "✓ GeckoDriver installation complete"
-
-      # Step 6: Install required Python dependencies
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install selenium==4.18.1
-          pip install undetected-chromedriver==3.5.5
-          pip install requests==2.31.0
-          pip install webdriver-manager==4.0.1
-          pip install pyotp==2.9.0
-          pip install cryptography==42.0.5
-          
-          # Verify installations
-          echo "Installed packages:"
-          pip list | grep -E "(selenium|undetected|requests|webdriver|pyotp|cryptography)"
+          if [ -f "geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz" ]; then
+            tar -xzf geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz
+            sudo mv geckodriver /usr/local/bin/
+            sudo chmod +x /usr/local/bin/geckodriver
+            rm geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz
+            
+            echo "GeckoDriver installed at: /usr/local/bin/geckodriver"
+            geckodriver --version || echo "GeckoDriver version check failed"
+            echo "✓ GeckoDriver installation complete"
+          else
+            echo "Warning: Failed to download GeckoDriver"
+            echo "Will rely on webdriver-manager in Python script"
+          fi
 
       # Step 7: Set up environment variables
       - name: Set environment variables
@@ -167,15 +172,23 @@ jobs:
           echo "GeckoDriver version (if installed):"
           geckodriver --version 2>/dev/null || echo "GeckoDriver not found"
           
+          # Check if Python script is valid
+          echo "Checking Python script syntax..."
+          python -m py_compile selenium_script.py && echo "✓ Python script syntax is valid"
+          
           # Run the script with output logging
           echo "Running selenium script..."
           
           # Run with error handling
-          if python selenium_script.py 2>&1 | tee selenium_logs/output.log; then
+          set +e  # Don't exit immediately on error
+          python selenium_script.py 2>&1 | tee selenium_logs/output.log
+          
+          EXIT_CODE=${PIPESTATUS[0]}
+          
+          if [ $EXIT_CODE -eq 0 ]; then
             echo "SCRIPT_SUCCESS=true" >> $GITHUB_ENV
             echo "✓ Selenium script completed successfully"
           else
-            EXIT_CODE=$?
             echo "SCRIPT_SUCCESS=false" >> $GITHUB_ENV
             echo "✗ Selenium script failed with exit code: $EXIT_CODE"
             
