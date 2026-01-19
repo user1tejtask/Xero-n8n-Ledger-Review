@@ -54,9 +54,9 @@ jobs:
 
       - name: Write Selenium Script
         run: |
-          # Use printf to handle special characters
-          printf '%s\n' "${{ github.event.inputs.selenium_script }}" > selenium_script.py
-          echo "Script saved successfully"
+          cat << 'EOF' > selenium_script.py
+          ${{ github.event.inputs.selenium_script }}
+          EOF
 
       - name: Run Selenium Script
         id: run_selenium
@@ -80,3 +80,4 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"success": false, "message": "Selenium script failed", "run_id": "${{ github.run_id }}"}' \
             --max-time 10 || true
+
