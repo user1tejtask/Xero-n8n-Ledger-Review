@@ -19,22 +19,19 @@ jobs:
       contents: write
 
     steps:
+      # Step 1: Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Step 2: Set up Python environment
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      - name: Setup Tor Proxy
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y tor
-          sudo service tor start
-          sleep 3
-          echo "PROXY_SERVER=socks5://localhost:9050" >> $GITHUB_ENV
-
+      # Step 3: Install Chrome browser
       - name: Install Chrome
         run: |
           wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
@@ -42,42 +39,51 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
 
+      # Step 4: Install required dependencies
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install selenium undetected-chromedriver requests webdriver-manager pyotp pysocks
+          python -m pip install --upgrade pip
+          pip install selenium undetected-chromedriver requests webdriver-manager pyotp
 
+      # Step 5: Set up environment variables
       - name: Set environment variables
         run: |
           echo "API_URL=${{ github.event.inputs.api_url }}" >> $GITHUB_ENV
           echo "GITHUB_WORKSPACE=${{ github.workspace }}" >> $GITHUB_ENV
-
-      - name: Write Selenium Script
+          
+      # Step 6: Write the Selenium script to a file
+      - name: Write Selenium Script to File
         run: |
           cat << 'EOF' > selenium_script.py
           ${{ github.event.inputs.selenium_script }}
           EOF
 
+      # Step 7: Run the generated Selenium script
       - name: Run Selenium Script
         id: run_selenium
-        env:
-          PROXY_SERVER: ${{ env.PROXY_SERVER }}
         run: |
           echo "Starting Selenium script execution..."
-          echo "Proxy: ${PROXY_SERVER:-No proxy}"
           python selenium_script.py
           echo "SCRIPT_SUCCESS=true" >> $GITHUB_ENV
 
+      # Step 8: Report success to API (if script didn't already)
       - name: Report Success
         if: success() && env.SCRIPT_SUCCESS == 'true'
-        run: echo "Script completed successfully"
+        run: |
+          echo "Script completed successfully"
+          # The script already sends files to the API, so we just log success here
 
+      # Step 9: Report failure to API
       - name: Report Failure
         if: failure()
         run: |
-          echo "Script failed"
-          curl -X POST "${{ github.event.inputs.api_url }}" \
+          echo "Script failed, sending failure notification to API..."
+          curl -X POST \
             -H "Content-Type: application/json" \
-            -d '{"success": false, "message": "Selenium script failed", "run_id": "${{ github.run_id }}"}' \
-            --max-time 10 || true
+            -d '{
+              "success": false,
+              "message": "Selenium script execution failed",
+              "workflow_run_id": "${{ github.run_id }}"
+            }' \
 
+            ${{ github.event.inputs.api_url }} || echo "Failed to send error notification"
